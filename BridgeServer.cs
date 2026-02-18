@@ -13,13 +13,14 @@ namespace Terraria_RL_Mod
 	internal class BridgeServer
 	{
 		private const int Port = 8765;
-		private const int ReceiveTimeoutMs = 100;
+		private const int ReceiveTimeoutMs = 10000; // 10 seconds
 
 		private static BridgeServer _instance;
 		public static BridgeServer Instance => _instance ??= new BridgeServer();
 
 		private Mod _mod;
 		private TcpListener _listener;
+		private bool _bindFailureLogged;
 		private TcpClient _client;
 		private NetworkStream _stream;
 		private volatile ActionDTO latestAction = new ActionDTO();
@@ -37,27 +38,38 @@ namespace Terraria_RL_Mod
 		/// <summary>Starts the TCP listener. Idempotent: safe to call multiple times. Catches port-in-use etc. so the game does not crash.</summary>
 		public void StartListening()
 		{
-			if (_listener != null) return;
 			try
 			{
-				_listener = new TcpListener(IPAddress.Loopback, Port);
+				if (_listener == null)
+				{
+					_listener = new TcpListener(IPAddress.Loopback, Port);
+				}
+
+				// Always ensure it's listening
 				_listener.Start();
+				_bindFailureLogged = false;
 				_mod?.Logger.Info($"TeRL bridge listening on localhost:{Port}");
 			}
 			catch (SocketException ex)
 			{
-				_mod?.Logger.Warn($"TeRL bridge could not bind to port {Port}: {ex.Message}");
+				_listener = null;
+				if (!_bindFailureLogged)
+				{
+					_bindFailureLogged = true;
+					_mod?.Logger.Warn($"TeRL bridge could not bind to port {Port}: {ex.Message}. Free the port or close the other process using it.");
+				}
 			}
 		}
 
 		private void AcceptConnection()
 		{
 			if (_client != null) return;
-			if (_listener == null) StartListening();
-			if (_listener == null || !_listener.Pending()) return;
+			if (_listener == null) return;
+
+			if (!_listener.Pending())
+				return;
 
 			_client = _listener.AcceptTcpClient();
-			_client.ReceiveTimeout = ReceiveTimeoutMs;
 			_stream = _client.GetStream();
 			_mod?.Logger.Info("RL client connected.");
 
@@ -77,9 +89,12 @@ namespace Terraria_RL_Mod
 					string line;
 					while ((line = reader.ReadLine()) != null)
 					{
+						string trimmed = line?.Trim();
+						if (string.IsNullOrEmpty(trimmed)) continue;
+
 						try
 						{
-							var dto = JsonSerializer.Deserialize<ActionDTO>(line);
+							var dto = JsonSerializer.Deserialize<ActionDTO>(trimmed);
 							if (dto != null)
 								latestAction = dto;
 						}
@@ -90,9 +105,9 @@ namespace Terraria_RL_Mod
 					}
 				}
 			}
-			catch (Exception)
+			catch (Exception ex)
 			{
-				// Stream closed or error; fall through to CloseClient
+				_mod?.Logger.Error($"ReceiveLoop crashed: {ex}");
 			}
 			CloseClient();
 		}
@@ -122,7 +137,7 @@ namespace Terraria_RL_Mod
 			}
 			catch (Exception ex)
 			{
-				_mod?.Logger.Warn($"TeRL bridge error: {ex.Message}");
+				_mod?.Logger.Error($"TeRL bridge error FULL: {ex}");
 				CloseClient();
 			}
 		}

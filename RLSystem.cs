@@ -25,11 +25,17 @@ namespace Terraria_RL_Mod
             try
             {
                 _tick++;
+
                 ActionDTO action = BridgeServer.Instance.GetLatestAction();
                 if (action != null)
                 {
                     ApplyActionId(player, action.action_id);
                 }
+
+                // Send state at 10 Hz (every 6 ticks at 60 tps)
+                if (_tick % 6 != 0)
+                    return;
+
                 StateDTO state = GatherState(player);
                 BridgeServer.Instance.Init(Mod);
                 BridgeServer.Instance.Update(player, state);
@@ -38,6 +44,12 @@ namespace Terraria_RL_Mod
             {
                 Mod?.Logger.Warn($"TeRL error in PostUpdatePlayers: {ex.Message}");
             }
+        }
+
+        public override void Load()
+        {
+            BridgeServer.Instance.Init(Mod);
+            BridgeServer.Instance.StartListening();
         }
 
         private StateDTO GatherState(Player player)
