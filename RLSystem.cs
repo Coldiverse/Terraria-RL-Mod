@@ -9,10 +9,8 @@ namespace TeRL
 		{
 			if (Main.gameMenu) return;
 
-			Player player = Main.LocalPlayer;
-			if (player == null) return;
-
-			BridgeServer.Update(player);
+			BridgeServer.Instance.Init(Mod);
+			BridgeServer.Instance.Update(Main.LocalPlayer);
 		}
 	}
 }

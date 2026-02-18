@@ -1,51 +1,125 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using Terraria;
+using Terraria.ModLoader;
 
 namespace TeRL
 {
-	internal static class BridgeServer
+	internal class BridgeServer
 	{
 		private const int Port = 8765;
 		private const int ReadBufferSize = 256;
+		private const int ReceiveTimeoutMs = 100;
 
-		private static TcpListener _listener;
-		private static TcpClient _client;
-		private static NetworkStream _stream;
-		private static readonly byte[] _readBuffer = new byte[ReadBufferSize];
-		private static readonly List<byte> _lineBuffer = new List<byte>();
+		private static BridgeServer _instance;
+		public static BridgeServer Instance => _instance ??= new BridgeServer();
+
+		private Mod _mod;
+		private TcpListener _listener;
+		private TcpClient _client;
+		private NetworkStream _stream;
+		private readonly byte[] _readBuffer = new byte[ReadBufferSize];
+		private readonly List<byte> _lineBuffer = new List<byte>();
 
 		private class ActionMessage
 		{
 			public int action { get; set; }
 		}
 
+		private BridgeServer() { }
+
+		/// <summary>Sets the Mod reference for logging. Idempotent.</summary>
+		public void Init(Mod mod)
+		{
+			_mod ??= mod;
+		}
+
 		/// <summary>Starts the TCP listener. Idempotent: safe to call multiple times.</summary>
-		public static void Start()
+		private void Start()
 		{
 			if (_listener != null) return;
 			_listener = new TcpListener(IPAddress.Loopback, Port);
 			_listener.Start();
+			_mod?.Logger.Info($"TeRL bridge listening on localhost:{Port}");
 		}
 
-		public static void Update(Player player)
+		private void AcceptConnection()
+		{
+			if (_client != null) return;
+			if (_listener == null) Start();
+			if (!_listener.Pending()) return;
+
+			_client = _listener.AcceptTcpClient();
+			_client.ReceiveTimeout = ReceiveTimeoutMs;
+			_stream = _client.GetStream();
+			_lineBuffer.Clear();
+			_mod?.Logger.Info("RL client connected.");
+		}
+
+		private void ReceiveAction(Player player)
+		{
+			if (_client == null || !_client.Connected || _stream == null) return;
+
+			player.controlLeft = false;
+			player.controlRight = false;
+			player.controlJump = false;
+			player.controlUseItem = false;
+
+			while (_stream.DataAvailable)
+			{
+				int read = _stream.Read(_readBuffer, 0, _readBuffer.Length);
+				for (int i = 0; i < read; i++)
+					_lineBuffer.Add(_readBuffer[i]);
+
+				int newlineIndex = _lineBuffer.IndexOf((byte)'\n');
+				if (newlineIndex >= 0)
+				{
+					string line = Encoding.UTF8.GetString(_lineBuffer.GetRange(0, newlineIndex).ToArray());
+					_lineBuffer.RemoveRange(0, newlineIndex + 1);
+
+					try
+					{
+						var msg = JsonSerializer.Deserialize<ActionMessage>(line);
+						if (msg != null)
+							ApplyAction(player, msg.action);
+					}
+					catch (JsonException ex)
+					{
+						_mod?.Logger.Debug($"TeRL: malformed action JSON: {ex.Message}");
+					}
+				}
+			}
+		}
+
+		private void SendState(Player player)
+		{
+			if (_client == null || !_client.Connected || _stream == null) return;
+
+			var state = new StateDTO
+			{
+				player_x = player.position.X,
+				player_y = player.position.Y,
+				health = player.statLife,
+				is_night = !Main.dayTime
+			};
+			string json = JsonSerializer.Serialize(state);
+			byte[] payload = Encoding.UTF8.GetBytes(json + "\n");
+			_stream.Write(payload, 0, payload.Length);
+		}
+
+		public void Update(Player player)
 		{
 			if (player == null) return;
 
 			try
 			{
-				if (_client == null)
-				{
-					if (_listener == null) Start();
-					if (!_listener.Pending()) return;
-					_client = _listener.AcceptTcpClient();
-					_stream = _client.GetStream();
-					_lineBuffer.Clear();
-				}
+				AcceptConnection();
+				if (_client == null) return;
 
 				if (!_client.Connected)
 				{
@@ -53,46 +127,27 @@ namespace TeRL
 					return;
 				}
 
-				player.controlLeft = false;
-				player.controlRight = false;
-				player.controlJump = false;
-				player.controlUseItem = false;
-
-				if (_stream.DataAvailable)
-				{
-					int read = _stream.Read(_readBuffer, 0, _readBuffer.Length);
-					for (int i = 0; i < read; i++)
-						_lineBuffer.Add(_readBuffer[i]);
-
-					int newlineIndex = _lineBuffer.IndexOf((byte)'\n');
-					if (newlineIndex >= 0)
-					{
-						string line = Encoding.UTF8.GetString(_lineBuffer.GetRange(0, newlineIndex).ToArray());
-						_lineBuffer.RemoveRange(0, newlineIndex + 1);
-
-						try
-						{
-							var msg = JsonSerializer.Deserialize<ActionMessage>(line);
-							if (msg != null)
-								ApplyAction(player, msg.action);
-						}
-						catch { /* ignore malformed JSON */ }
-					}
-				}
-
-				var state = new StateDTO
-				{
-					player_x = player.position.X,
-					player_y = player.position.Y,
-					health = player.statLife,
-					is_night = !Main.dayTime
-				};
-				string json = JsonSerializer.Serialize(state);
-				byte[] payload = Encoding.UTF8.GetBytes(json + "\n");
-				_stream.Write(payload, 0, payload.Length);
+				ReceiveAction(player);
+				SendState(player);
 			}
-			catch
+			catch (SocketException ex)
 			{
+				_mod?.Logger.Warn($"TeRL bridge socket error: {ex.Message}");
+				CloseClient();
+			}
+			catch (IOException ex)
+			{
+				_mod?.Logger.Warn($"TeRL bridge IO error: {ex.Message}");
+				CloseClient();
+			}
+			catch (ObjectDisposedException)
+			{
+				_mod?.Logger.Warn("TeRL bridge: stream/client disposed.");
+				CloseClient();
+			}
+			catch (Exception ex)
+			{
+				_mod?.Logger.Warn($"TeRL bridge error: {ex.Message}");
 				CloseClient();
 			}
 		}
@@ -109,13 +164,14 @@ namespace TeRL
 			}
 		}
 
-		private static void CloseClient()
+		private void CloseClient()
 		{
 			try { _stream?.Close(); } catch { }
 			try { _client?.Close(); } catch { }
 			_stream = null;
 			_client = null;
 			_lineBuffer.Clear();
+			_mod?.Logger.Info("RL client disconnected.");
 		}
 	}
 }
