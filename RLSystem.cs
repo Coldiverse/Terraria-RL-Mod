@@ -3,14 +3,13 @@ using Terraria.ModLoader;
 
 namespace TeRL
 {
-	public class RLSystem : ModSystem
-	{
-		public override void PostUpdateEverything()
+	public override void PostUpdateEverything()
 		{
 			if (Main.gameMenu) return;
+
+			Mod.Logger.Info("RLSystem running");
 
 			BridgeServer.Instance.Init(Mod);
 			BridgeServer.Instance.Update(Main.LocalPlayer);
 		}
-	}
 }

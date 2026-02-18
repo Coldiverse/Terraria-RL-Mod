@@ -36,8 +36,16 @@ namespace TeRL
 		/// <summary>Sets the Mod reference for logging. Idempotent.</summary>
 		public void Init(Mod mod)
 		{
-			_mod ??= mod;
+					_mod ??= mod;
+
+			if (_listener == null)
+			{
+				_listener = new TcpListener(IPAddress.Loopback, Port);
+				_listener.Start();
+				_mod?.Logger.Info($"TeRL bridge listening on localhost:{Port}");
+			}
 		}
+
 
 		/// <summary>Starts the TCP listener. Idempotent: safe to call multiple times.</summary>
 		private void Start()
