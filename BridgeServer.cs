@@ -1,10 +1,10 @@
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using Terraria;
 using Terraria.ModLoader;
 
@@ -13,7 +13,6 @@ namespace TeRL
 	internal class BridgeServer
 	{
 		private const int Port = 8765;
-		private const int ReadBufferSize = 256;
 		private const int ReceiveTimeoutMs = 100;
 
 		private static BridgeServer _instance;
@@ -23,15 +22,11 @@ namespace TeRL
 		private TcpListener _listener;
 		private TcpClient _client;
 		private NetworkStream _stream;
-		private readonly byte[] _readBuffer = new byte[ReadBufferSize];
-		private readonly List<byte> _lineBuffer = new List<byte>();
-
-		private class ActionMessage
-		{
-			public int action { get; set; }
-		}
+		private volatile ActionDTO latestAction = new ActionDTO();
 
 		private BridgeServer() { }
+
+		internal ActionDTO GetLatestAction() => latestAction;
 
 		/// <summary>Sets the Mod reference for logging. Idempotent.</summary>
 		public void Init(Mod mod)
@@ -64,43 +59,42 @@ namespace TeRL
 			_client = _listener.AcceptTcpClient();
 			_client.ReceiveTimeout = ReceiveTimeoutMs;
 			_stream = _client.GetStream();
-			_lineBuffer.Clear();
 			_mod?.Logger.Info("RL client connected.");
+
+			var recvThread = new Thread(ReceiveLoop)
+			{
+				IsBackground = true
+			};
+			recvThread.Start();
 		}
 
-		private void ReceiveAction(Player player)
+		private void ReceiveLoop()
 		{
-			if (_client == null || !_client.Connected || _stream == null) return;
-
-			player.controlLeft = false;
-			player.controlRight = false;
-			player.controlJump = false;
-			player.controlUseItem = false;
-
-			while (_stream.DataAvailable)
+			try
 			{
-				int read = _stream.Read(_readBuffer, 0, _readBuffer.Length);
-				for (int i = 0; i < read; i++)
-					_lineBuffer.Add(_readBuffer[i]);
-
-				int newlineIndex = _lineBuffer.IndexOf((byte)'\n');
-				if (newlineIndex >= 0)
+				using (var reader = new StreamReader(_stream, Encoding.UTF8))
 				{
-					string line = Encoding.UTF8.GetString(_lineBuffer.GetRange(0, newlineIndex).ToArray());
-					_lineBuffer.RemoveRange(0, newlineIndex + 1);
-
-					try
+					string line;
+					while ((line = reader.ReadLine()) != null)
 					{
-						var msg = JsonSerializer.Deserialize<ActionMessage>(line);
-						if (msg != null)
-							ApplyAction(player, msg.action);
-					}
-					catch (JsonException ex)
-					{
-						_mod?.Logger.Debug($"TeRL: malformed action JSON: {ex.Message}");
+						try
+						{
+							var dto = JsonSerializer.Deserialize<ActionDTO>(line);
+							if (dto != null)
+								latestAction = dto;
+						}
+						catch (JsonException ex)
+						{
+							_mod?.Logger.Debug($"TeRL: malformed action JSON: {ex.Message}");
+						}
 					}
 				}
 			}
+			catch (Exception)
+			{
+				// Stream closed or error; fall through to CloseClient
+			}
+			CloseClient();
 		}
 
 		/// <summary>Serializes the state to JSON with System.Text.Json and sends it over the bridge. Called once per tick.</summary>
@@ -114,7 +108,7 @@ namespace TeRL
 			_stream.Write(payload, 0, payload.Length);
 		}
 
-		/// <summary>Accepts connection, receives actions, and sends state once. Call once per tick from PostUpdatePlayers.</summary>
+		/// <summary>Accepts connection and sends state once. Call once per tick from PostUpdatePlayers.</summary>
 		public void Update(Player player, StateDTO state)
 		{
 			if (player == null) return;
@@ -125,24 +119,11 @@ namespace TeRL
 				if (_client == null) return;
 
 				SendState(state);
-				ReceiveAction(player);
 			}
 			catch (Exception ex)
 			{
 				_mod?.Logger.Warn($"TeRL bridge error: {ex.Message}");
 				CloseClient();
-			}
-		}
-
-		private static void ApplyAction(Player player, int action)
-		{
-			switch (action)
-			{
-				case 0: player.controlLeft = true; break;
-				case 1: player.controlRight = true; break;
-				case 2: player.controlJump = true; break;
-				case 3: player.controlUseItem = true; break;
-				case 4: break;
 			}
 		}
 
@@ -152,7 +133,6 @@ namespace TeRL
 			try { _client?.Close(); } catch { }
 			_stream = null;
 			_client = null;
-			_lineBuffer.Clear();
 			_mod?.Logger.Info("RL client disconnected.");
 		}
 	}

@@ -26,6 +26,15 @@ namespace TeRL
             try
             {
                 _tick++;
+                ActionDTO action = BridgeServer.Instance.GetLatestAction();
+                if (action != null)
+                {
+                    player.controlLeft = action.move_left == 1;
+                    player.controlRight = action.move_right == 1;
+                    player.controlJump = action.jump == 1;
+                    player.controlUseItem = action.use_item == 1;
+                    _lastAction = action;
+                }
                 StateDTO state = GatherState(player);
                 BridgeServer.Instance.Init(Mod);
                 BridgeServer.Instance.Update(player, state);
