@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace TeRL
+namespace Terraria_RL_Mod
 {
 	public class StateDTO
 	{
@@ -59,4 +59,5 @@ namespace TeRL
 		public float vy { get; set; }
 		public int hp { get; set; }
 	}
+
 }

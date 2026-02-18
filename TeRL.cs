@@ -1,10 +1,10 @@
 using System.Net.Sockets;
 using Terraria.ModLoader;
 
-namespace TeRL
+namespace Terraria_RL_Mod
 {
 	// Please read https://github.com/tModLoader/tModLoader/wiki/Basic-tModLoader-Modding-Guide#mod-skeleton-contents for more information about the various files in a mod.
-	public class TeRL : Mod
+	public class Terraria_RL_Mod : Mod
 	{
 		public override void Load()
 		{

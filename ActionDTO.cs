@@ -1,4 +1,4 @@
-namespace TeRL
+namespace Terraria_RL_Mod
 {
 	public class ActionDTO
 	{

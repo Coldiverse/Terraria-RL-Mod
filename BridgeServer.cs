@@ -8,7 +8,7 @@ using System.Threading;
 using Terraria;
 using Terraria.ModLoader;
 
-namespace TeRL
+namespace Terraria_RL_Mod
 {
 	internal class BridgeServer
 	{

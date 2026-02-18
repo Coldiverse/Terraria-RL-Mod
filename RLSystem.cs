@@ -4,7 +4,7 @@ using Microsoft.Xna.Framework;
 using Terraria;
 using Terraria.ModLoader;
 
-namespace TeRL
+namespace Terraria_RL_Mod
 {
     public class RLSystem : ModSystem
     {
