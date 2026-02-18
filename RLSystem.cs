@@ -13,7 +13,6 @@ namespace TeRL
         private const int TileChannels = 4;
         private const int MaxEntities = 8;
 
-        private ActionDTO _lastAction = new ActionDTO();
         private int _tick;
 
         public override void PostUpdatePlayers()
@@ -29,11 +28,7 @@ namespace TeRL
                 ActionDTO action = BridgeServer.Instance.GetLatestAction();
                 if (action != null)
                 {
-                    player.controlLeft = action.move_left == 1;
-                    player.controlRight = action.move_right == 1;
-                    player.controlJump = action.jump == 1;
-                    player.controlUseItem = action.use_item == 1;
-                    _lastAction = action;
+                    ApplyActionId(player, action.action_id);
                 }
                 StateDTO state = GatherState(player);
                 BridgeServer.Instance.Init(Mod);
@@ -48,6 +43,19 @@ namespace TeRL
         private StateDTO GatherState(Player player)
         {
             int tick = _tick;
+            bool left = player.controlLeft;
+            bool right = player.controlRight;
+            bool jump = player.controlJump;
+            bool use = player.controlUseItem;
+
+            int actionId;
+            if (left && jump) actionId = 4;
+            else if (right && jump) actionId = 5;
+            else if (left) actionId = 1;
+            else if (right) actionId = 2;
+            else if (jump) actionId = 3;
+            else if (use) actionId = 6;
+            else actionId = 0;
 
             var state = new StateDTO
             {
@@ -56,10 +64,31 @@ namespace TeRL
                 inventory = BuildInventoryDTO(player),
                 tile_window = BuildTileWindowDTO(player),
                 nearby_entities = BuildNearbyEntities(player),
-                action = _lastAction
+                action = new ActionDTO
+                {
+                    action_id = actionId
+                }
             };
 
             return state;
+        }
+
+        private static void ApplyActionId(Player player, int actionId)
+        {
+            player.controlLeft = false;
+            player.controlRight = false;
+            player.controlJump = false;
+            player.controlUseItem = false;
+            switch (actionId)
+            {
+                case 1: player.controlLeft = true; break;
+                case 2: player.controlRight = true; break;
+                case 3: player.controlJump = true; break;
+                case 4: player.controlLeft = true; player.controlJump = true; break;
+                case 5: player.controlRight = true; player.controlJump = true; break;
+                case 6: player.controlUseItem = true; break;
+                default: break;
+            }
         }
 
         private PlayerDTO BuildPlayerDTO(Player player)
